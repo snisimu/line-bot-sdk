@@ -4,9 +4,12 @@
 {-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE ExtendedDefaultRules       #-}
 {-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
+{-# LANGUAGE StandaloneDeriving         #-}
+
 -- |
 -- Module      : Line.Bot.Webhook.Events
 -- Copyright   : (c) Alexandre Moreno, 2019
@@ -18,6 +21,7 @@ module Line.Bot.Webhook.Events
   ( Events(..)
   , Event(..)
   , Message(..)
+  , ContentProvider(..)
   , EpochMilli(..)
   , Source(..)
   , Members(..)
@@ -55,7 +59,7 @@ data Events = Events
   { destination :: Id User -- ^ User ID of a bot that should receive webhook events
   , events      :: [Event] -- ^ List of webhook event objects
   }
-  deriving (Eq, Show, Generic)
+  deriving (Show, Generic)
 
 instance FromJSON Events
 
@@ -109,7 +113,7 @@ data Event =
                       , timestamp  :: EpochMilli
                       , things     :: Things
                       }
-  deriving (Eq, Show, Generic)
+  deriving (Show, Generic)
 
 instance FromJSON Event where
   parseJSON = genericParseJSON defaultOptions
@@ -140,7 +144,7 @@ data Message =
                     , fileName  :: Text
                     }
   | MessageLocation { messageId :: MessageId
-                    , title     :: Text
+                    , title     :: Maybe Text
                     , address   :: Text
                     , latitude  :: Double
                     , longitude :: Double
@@ -188,24 +192,27 @@ instance FromJSON EpochMilli where
              . toRational
              . (/ 1000)
 
-data Source =
-    SourceUser (Id User)
-  | SourceGroup (Id Group) (Maybe (Id User))
-  | SourceRoom (Id Room) (Maybe (Id User))
-  deriving (Eq, Show)
+data Source = forall a. Source (Id a)
+
+deriving instance Show Source
+deriving instance Typeable Source
 
 instance FromJSON Source where
   parseJSON = withObject "Source" $ \o -> do
     messageType <- o .: "type"
     case messageType of
-      "user"  -> SourceUser  <$> o .: "userId"
-      "group" -> SourceGroup <$> o .: "groupId" <*> o .:? "userId"
-      "room"  -> SourceRoom  <$> o .: "roomId"  <*> o .:? "userId"
+      "user"  -> Source . UserId  <$> o .: "userId"
+      "group" -> Source . GroupId <$> o .: "groupId"
+      "room"  -> Source . RoomId  <$> o .: "roomId"
       _       -> fail ("unknown source: " ++ messageType)
 
+instance ToJSON Source where
+  toJSON (Source (UserId a))  = object ["type" .= "user", "userId" .= a]
+  toJSON (Source (GroupId a)) = object ["type" .= "group", "groupId" .= a]
+  toJSON (Source (RoomId a))  = object ["type" .= "room", "roomId" .= a]
 
 newtype Members = Members { members :: [Source] }
-  deriving (Eq, Show, Generic)
+  deriving (Show, Generic)
 
 instance FromJSON Members
 

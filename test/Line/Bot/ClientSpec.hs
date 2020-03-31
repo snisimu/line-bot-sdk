@@ -9,6 +9,7 @@
 module Line.Bot.ClientSpec (spec) where
 
 import           Control.Arrow                    (left)
+import           Control.DeepSeq                  (NFData)
 import           Control.Monad                    ((>=>))
 import           Control.Monad.Free
 import           Control.Monad.Trans.Reader       (runReaderT)
@@ -30,9 +31,9 @@ import           Network.Wai                      as Wai (Request,
                                                           requestHeaders)
 import           Network.Wai.Handler.Warp         (Port, withApplication)
 import           Servant
-import           Servant.Client
 import           Servant.Client.Core
-import           Servant.Client.Free as F
+import           Servant.Client.Free              as F
+import           Servant.Client.Streaming
 import           Servant.Server                   (Context (..))
 import           Servant.Server.Experimental.Auth (AuthHandler, AuthServerData,
                                                    mkAuthHandler)
@@ -56,6 +57,15 @@ type API = GetProfile' Value
       :<|> GetGroupMemberProfile' Value
       :<|> GetRoomMemberProfile' Value
 
+getReplyMessageCountF :: LineDate -> Auth -> Free ClientF MessageCount
+getReplyMessageCountF = F.client (Proxy :: Proxy GetReplyMessageCount)
+
+getPushMessageCountF :: LineDate -> Auth -> Free ClientF MessageCount
+getPushMessageCountF = F.client (Proxy :: Proxy GetPushMessageCount)
+
+getMulticastMessageCountF :: LineDate -> Auth -> Free ClientF MessageCount
+getMulticastMessageCountF = F.client (Proxy :: Proxy GetMulticastMessageCount)
+
 testProfile :: Value
 testProfile = [aesonQQ|
   {
@@ -71,17 +81,11 @@ withPort port app = do
   manager <- newManager defaultManagerSettings
   app $ mkClientEnv manager $ BaseUrl Http "localhost" port ""
 
-runLine :: Line a -> Port -> IO (Either ServantError a)
-runLine comp port = withPort port $ runClientM $ runReaderT comp (mkAuth "fake")
+token :: ChannelToken
+token = "fake"
 
-getReplyMessageCountF :: Auth -> LineDate -> Free ClientF MessageCount
-getReplyMessageCountF = F.client (Proxy :: Proxy GetReplyMessageCount)
-
-getPushMessageCountF :: Auth -> LineDate -> Free ClientF MessageCount
-getPushMessageCountF = F.client (Proxy :: Proxy GetPushMessageCount)
-
-getMulticastMessageCountF :: Auth -> LineDate -> Free ClientF MessageCount
-getMulticastMessageCountF = F.client (Proxy :: Proxy GetMulticastMessageCount)
+runLine :: NFData a => Line a -> Port -> IO (Either ClientError a)
+runLine comp port = withPort port $ runClientM $ runReaderT comp token
 
 app :: Application
 app = serveWithContext (Proxy :: Proxy API) serverContext $
@@ -104,14 +108,16 @@ spec = describe "Line client" $ do
       runLine (getRoomMemberProfile "1" "1") >=> (`shouldSatisfy` isRight)
 
   it "should send `date` query param for push message count" $ do
-    let Free (RunRequest Request{..} _) = getPushMessageCountF (mkAuth "fake") (LineDate $ fromGregorian 2019 4 7)
+    let Free (RunRequest Request{..} _) = getPushMessageCountF date (mkAuth token)
     toList requestQueryString `shouldBe` [("date", Just "20190407")]
 
   it "should send `date` query param for reply message count" $ do
-    let Free (RunRequest Request{..} _) = getReplyMessageCountF (mkAuth "fake") (LineDate $ fromGregorian 2019 4 7)
+    let Free (RunRequest Request{..} _) = getReplyMessageCountF date (mkAuth token)
     toList requestQueryString `shouldBe` [("date", Just "20190407")]
 
   it "should send `date` query param for multicast message count" $ do
-    let Free (RunRequest Request{..} _) = getMulticastMessageCountF (mkAuth "fake") (LineDate $ fromGregorian 2019 4 7)
+    let Free (RunRequest Request{..} _) = getMulticastMessageCountF date (mkAuth token)
     toList requestQueryString `shouldBe` [("date", Just "20190407")]
+  where
+    date = LineDate $ fromGregorian 2019 4 7
 
